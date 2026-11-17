@@ -1,4 +1,6 @@
-importlib-metadata==8.5.0
-pytubefix==8.12.2
-typing-extensions==4.12.2
-zipp==3.21.0
+# Requires Python >=3.11.
+# Direct pins only; transitive dependencies are resolved by pip.
+importlib-metadata==10.2.0
+pytubefix==11.2.1
+typing-extensions==4.16.0
+zipp==4.1.2
