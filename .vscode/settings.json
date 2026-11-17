@@ -1,0 +1,7 @@
+{
+  "python.analysis.extraPaths": [
+    "C:\\Users\\thanh\\AppData\\Roaming\\Python\\Python312\\site-packages"
+  ],
+  "python.analysis.autoImportCompletions": true,
+  "python.analysis.typeCheckingMode": "basic"
+}
