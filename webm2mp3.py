@@ -5,29 +5,13 @@ import tempfile
 from pathlib import Path
 
 
-def _read_arguments():
-    parser = argparse.ArgumentParser(description="Convert WebM audio to MP3")
-    parser.add_argument("path")
-    parser.add_argument("--ffmpeg-exe", default="ffmpeg")
-    return parser.parse_args()
-
-
-def convert_webm_folder_to_mp3(ffmpeg_exe, folder):
-    files = sorted(p for p in Path(folder).iterdir() if p.is_file() and p.suffix.lower() == ".webm")
-    return convert_webm_files_to_mp3(ffmpeg_exe, [{"file": str(p)} for p in files])
-
-
-def convert_webm_files_to_mp3(ffmpeg_exe, lst):
-    outputs = []
-    for item in lst:
-        result = convert_webm_file_to_mp3(ffmpeg_exe, item["file"], item.get("title"), item.get("abr"))
-        if result is not None:
-            outputs.append(result)
-    return outputs
+class ConversionError(RuntimeError):
+    pass
 
 
 def convert_webm_file_to_mp3(ffmpeg_exe, file_name, title=None, abr=None):
-    source = Path(file_name)
+    """Publish MP3 without overwriting; caller owns source cleanup and checkpoints."""
+    source = Path(file_name).resolve()
     target = source.with_suffix(".mp3")
     temporary = None
     try:
@@ -35,35 +19,47 @@ def convert_webm_file_to_mp3(ffmpeg_exe, file_name, title=None, abr=None):
             raise ValueError("Input must be an existing WebM file")
         if target.exists():
             raise FileExistsError(str(target))
-        fd, temporary = tempfile.mkstemp(prefix=".convert-", suffix=".mp3", dir=str(source.parent))
+        fd, temporary = tempfile.mkstemp(prefix=".convert-", suffix=".mp3", dir=source.parent)
         os.close(fd)
-        params = [ffmpeg_exe, "-nostdin", "-i", str(source), "-vn", "-c:a", "libmp3lame", "-q:a", "2", "-loglevel", "warning", "-y", temporary]
-        subprocess.run(params, check=True, timeout=3600)
+        subprocess.run([ffmpeg_exe, "-nostdin", "-i", str(source), "-vn", "-c:a", "libmp3lame", "-q:a", "2", "-loglevel", "warning", "-y", temporary], check=True, timeout=3600)
         if Path(temporary).stat().st_size == 0:
-            raise RuntimeError("FFmpeg produced an empty file")
-        if target.exists():
-            raise FileExistsError(str(target))
-        os.replace(temporary, target)
-        temporary = None
-        try:
-            source.unlink()
-        except OSError as exc:
-            print(f"MP3 created, but source cleanup failed: {exc}")
+            raise ConversionError("FFmpeg produced an empty file")
+        os.link(temporary, target)
         return str(target)
-    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         print(f"Failed to convert {title or file_name}: {exc}")
         return None
     finally:
-        if temporary is not None:
+        if temporary:
             Path(temporary).unlink(missing_ok=True)
 
 
+def convert_webm_files_to_mp3(ffmpeg_exe, lst):
+    outputs = []
+    for item in lst:
+        result = convert_webm_file_to_mp3(ffmpeg_exe, item["file"], item.get("title"))
+        if result:
+            outputs.append(result)
+    return outputs
+
+
+def convert_webm_folder_to_mp3(ffmpeg_exe, folder):
+    return convert_webm_files_to_mp3(ffmpeg_exe, [{"file": str(p)} for p in sorted(Path(folder).iterdir()) if p.is_file() and p.suffix.lower() == ".webm"])
+
+
 def main():
-    args = _read_arguments()
-    if Path(args.path).is_file():
-        return 0 if convert_webm_file_to_mp3(args.ffmpeg_exe, args.path) else 1
-    files = [p for p in Path(args.path).iterdir() if p.is_file() and p.suffix.lower() == ".webm"]
-    return 0 if len(convert_webm_folder_to_mp3(args.ffmpeg_exe, args.path)) == len(files) else 1
+    parser = argparse.ArgumentParser(description="Convert WebM to MP3; source files are retained")
+    parser.add_argument("path")
+    parser.add_argument("--ffmpeg-exe", default="ffmpeg")
+    args = parser.parse_args()
+    from output_lock import file_lock
+    path = Path(args.path).resolve()
+    folder = path.parent if path.is_file() else path
+    with file_lock(folder / ".audio-output.lock"):
+        if path.is_file():
+            return 0 if convert_webm_file_to_mp3(args.ffmpeg_exe, str(path)) else 1
+        inputs = [p for p in path.iterdir() if p.is_file() and p.suffix.lower() == ".webm"]
+        return int(len(convert_webm_folder_to_mp3(args.ffmpeg_exe, str(path))) != len(inputs))
 
 
 if __name__ == "__main__":

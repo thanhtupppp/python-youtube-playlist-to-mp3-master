@@ -1,19 +1,26 @@
 import json
 import os
 import tempfile
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 DEFAULT_HISTORY_FILE_NAME = "__downloaded.yt.json"
 
 
+@dataclass
 class TrackHistory:
-    def __init__(self):
-        self.title = None
-        self.stream_id = None
-        self.date = None
-        self.target_file = None
-        self.abr = None
-        self.status = None
+    title: str | None = None
+    stream_id: int | None = None
+    date: str | None = None
+    target_file: str | None = None
+    abr: int | None = None
+    status: str = "pending"
+    source_file: str | None = None
+    output_file: str | None = None
+    conversion_status: str = "pending"
+    gain_status: str = "pending"
+    gain_target: int | None = None
+    last_error: str | None = None
 
 
 def try_load_track_history(history_file_name):
@@ -21,39 +28,37 @@ def try_load_track_history(history_file_name):
     if not path.exists():
         return {}
     try:
-        with path.open("r", encoding="utf-8") as handle:
-            data = json.load(handle)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        names = {f.name for f in fields(TrackHistory)}
         result = {}
-        for key, value in data.items():
-            track = TrackHistory()
-            track.title = value["title"]
-            track.date = value["date"]
-            track.target_file = value["file"]
-            track.stream_id = value["stream_id"]
-            track.abr = int(value["abr"]) if value.get("abr") is not None else None
-            track.status = value["status"]
+        for key, raw in data.items():
+            track = TrackHistory(**{k: v for k, v in raw.items() if k in names})
+            track.target_file = raw.get("target_file") or raw.get("file")
+            track.abr = int(track.abr) if track.abr is not None else None
+            if track.target_file:
+                if Path(track.target_file).suffix.lower() == ".mp3":
+                    track.output_file = track.output_file or track.target_file
+                    track.conversion_status = "converted"
+                else:
+                    track.source_file = track.source_file or track.target_file
             result[key] = track
         return result
-    except (ValueError, KeyError, TypeError, AttributeError) as exc:
-        raise ValueError(f"Invalid history file {path}; preserve or restore it before retrying") from exc
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise ValueError(f"Invalid history: {path}. Restore a backup; original file was not changed.") from exc
 
 
 def save_track_history(tracks, history_file_name):
     path = Path(history_file_name)
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = {}
-    for key, track in tracks.items():
-        data[key] = {"title": track.title, "date": track.date, "file": track.target_file,
-                     "stream_id": track.stream_id, "status": track.status, "abr": track.abr}
     temporary = None
     try:
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=str(path.parent), delete=False) as handle:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as handle:
             temporary = handle.name
-            json.dump(data, handle, indent=2, ensure_ascii=False)
+            json.dump({key: asdict(track) for key, track in tracks.items()}, handle, indent=2, ensure_ascii=False)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
         temporary = None
     finally:
-        if temporary is not None:
+        if temporary:
             Path(temporary).unlink(missing_ok=True)
