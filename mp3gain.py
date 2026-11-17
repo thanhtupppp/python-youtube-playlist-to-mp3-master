@@ -1,58 +1,46 @@
 import argparse
-import os
 import subprocess
-from typing import List
+from pathlib import Path
 
 
 def _read_arguments():
-    parser = argparse.ArgumentParser(description='The script to download audio tracks (webm) from YouTube playlist')
-    parser.add_argument("path",
-                        help="Path to the local directory where the mp3 files are, or a single MP3 file.")
-    parser.add_argument("--mp3gain-exe",
-                        help="Path to mp3gain.exe, including file name (PATH variable is used otherwise).",
-                        default="mp3gain.exe")
-    parser.add_argument("--target-gain",
-                        help="Value of target gain. Default is 89.",
-                        default=89)
-    ret = parser.parse_args()
-    return ret
+    parser = argparse.ArgumentParser(description="Adjust MP3 gain")
+    parser.add_argument("path")
+    parser.add_argument("--mp3gain-exe", default="mp3gain")
+    parser.add_argument("--target-gain", type=int, default=89)
+    return parser.parse_args()
 
 
-def process_folder(mp3gain_exe: str, folder: str, target_gain: int = 89) -> None:
-    mp3files = [f for f in os.listdir(folder) if os.path.isfile(f) and len(f) > 4 and f[-4:].lower() == ".mp3"]
-    print(f"\tfound {len(mp3files)} files")
-    tmp = [os.path.join(folder, q) for q in mp3files]
-    process_files(mp3gain_exe, tmp, target_gain=target_gain)
+def process_folder(mp3gain_exe, folder, target_gain=89):
+    files = sorted(str(p) for p in Path(folder).iterdir() if p.is_file() and p.suffix.lower() == ".mp3")
+    return process_files(mp3gain_exe, files, target_gain)
 
 
-def process_files(mp3gain_exe: str, mp3files: List[str], target_gain: int = 89) -> None:
-    for mp3file in mp3files:
-        process_file(mp3gain_exe, mp3file, target_gain=target_gain)
+def process_files(mp3gain_exe, mp3files, target_gain=89):
+    results = [process_file(mp3gain_exe, path, target_gain) for path in mp3files]
+    return all(results)
 
 
-def process_file(mp3gain_exe: str, mp3file: str, target_gain: int = 89) -> None:
-    print(f"mp3gain => {mp3file}")
+def process_file(mp3gain_exe, mp3file, target_gain=89):
     try:
+        if not Path(mp3file).is_file():
+            raise FileNotFoundError(mp3file)
         params = [mp3gain_exe, "-r"]
         if target_gain != 89:
-            addiction = target_gain - 89
-            addiction = float(addiction)
-            params.append("-d")
-            params.append(str(addiction))
-        params.append(mp3file)
-        subprocess.run(params)
-    except Exception as e:
-        print(f"Failed to apply mp3gain on '{mp3file}'. Error: " + str(e) + ".")
+            params.extend(["-d", str(float(target_gain - 89))])
+        params.append(str(mp3file))
+        subprocess.run(params, check=True, timeout=600)
+        return True
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"Failed to apply mp3gain on {mp3file}: {exc}")
+        return False
 
 
 def main():
     args = _read_arguments()
-    print(f"MP3Gain for '{args.path}'")
-    if os.path.isfile(args.path):
-        process_file(args.mp3gain_exe, args.path, args.target_gain)
-    else:
-        process_folder(args.mp3gain_exe, args.path, args.target_gain)
+    process = process_file if Path(args.path).is_file() else process_folder
+    return 0 if process(args.mp3gain_exe, args.path, args.target_gain) else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

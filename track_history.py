@@ -1,11 +1,12 @@
-import os
 import json
+import os
+import tempfile
+from pathlib import Path
 
 DEFAULT_HISTORY_FILE_NAME = "__downloaded.yt.json"
 
 
 class TrackHistory:
-
     def __init__(self):
         self.title = None
         self.stream_id = None
@@ -16,36 +17,43 @@ class TrackHistory:
 
 
 def try_load_track_history(history_file_name):
-    if not os.path.exists(history_file_name):
+    path = Path(history_file_name)
+    if not path.exists():
         return {}
-
-    ret = {}
-    with open(history_file_name, "r") as f:
-        tmp = json.load(f)
-    for key in tmp.keys():
-        val = tmp[key]
-        trk = TrackHistory()
-        trk.title = val["title"]
-        trk.date = val["date"]
-        trk.target_file = val["file"]
-        trk.stream_id = val["stream_id"]
-        trk.abr = val["abr"] if "abr" in val.keys() else None
-        trk.status = val["status"]
-        ret[key] = trk
-    return ret
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        result = {}
+        for key, value in data.items():
+            track = TrackHistory()
+            track.title = value["title"]
+            track.date = value["date"]
+            track.target_file = value["file"]
+            track.stream_id = value["stream_id"]
+            track.abr = int(value["abr"]) if value.get("abr") is not None else None
+            track.status = value["status"]
+            result[key] = track
+        return result
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise ValueError(f"Invalid history file {path}; preserve or restore it before retrying") from exc
 
 
 def save_track_history(tracks, history_file_name):
-    dct = {}
-    for key in tracks.keys():
-        trk = tracks[key]
-        tmp = {"title": trk.title,
-               "date": trk.date,
-               "file": trk.target_file,
-               "stream_id": trk.stream_id,
-               "status": trk.status}
-        if trk.abr is not None:
-            trk.abr = str(trk.abr)
-        dct[key] = tmp
-    with open(history_file_name, "w") as f:
-        json.dump(dct, f, indent=2)
+    path = Path(history_file_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {}
+    for key, track in tracks.items():
+        data[key] = {"title": track.title, "date": track.date, "file": track.target_file,
+                     "stream_id": track.stream_id, "status": track.status, "abr": track.abr}
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=str(path.parent), delete=False) as handle:
+            temporary = handle.name
+            json.dump(data, handle, indent=2, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        temporary = None
+    finally:
+        if temporary is not None:
+            Path(temporary).unlink(missing_ok=True)
